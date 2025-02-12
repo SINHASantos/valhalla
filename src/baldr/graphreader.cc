@@ -1,5 +1,3 @@
-#include <fstream>
-#include <iostream>
 #include <string>
 #include <sys/stat.h>
 #include <utility>
@@ -786,10 +784,19 @@ GraphId GraphReader::GetShortcut(const GraphId& id) {
   GraphId edgeid = id;
   const NodeInfo* node = nullptr;
   const DirectedEdge* cont_de = nullptr;
+  const DirectedEdge* first_de = GetOpposingEdge(id);
   while (true) {
     // Get the continuing directed edge. Initial case is to use the opposing
     // directed edge.
-    cont_de = (node == nullptr) ? GetOpposingEdge(id) : continuing_edge(tile, edgeid, node);
+    if (node) {
+      cont_de = continuing_edge(tile, edgeid, node);
+      if (cont_de == first_de) {
+        LOG_DEBUG("GraphReader::GetShortcut edges are in a loop and found no shortcut among them");
+        break;
+      }
+    } else {
+      cont_de = first_de;
+    }
     if (cont_de == nullptr) {
       LOG_DEBUG("GraphReader::GetShortcut found no clear continuing edge");
       break;
@@ -1018,6 +1025,10 @@ IncidentResult GraphReader::GetIncidents(const GraphId& edge_id, graph_tile_ptr&
   int end_index = end - itile->locations().begin();
 
   return {itile, begin_index, end_index};
+}
+
+graph_tile_ptr LimitedGraphReader::GetGraphTile(const GraphId& graphid) {
+  return reader_.GetGraphTile(graphid);
 }
 
 const valhalla::IncidentsTile::Metadata&
