@@ -1,10 +1,8 @@
 #include "mjolnir/elevationbuilder.h"
 
-#include <future>
+#include <random>
 #include <thread>
 #include <utility>
-
-#include <boost/format.hpp>
 
 #include "baldr/graphconstants.h"
 #include "baldr/graphid.h"
@@ -58,10 +56,8 @@ std::vector<int8_t> encode_edge_elevation(const std::unique_ptr<valhalla::skadi:
   if (error) {
     double diff = 0;
     for (size_t i = 1; i < heights.size(); i++) {
-      if (i < (heights.size() - 1)) {
-        auto d = std::abs(heights[i] - heights[i + 1]);
-        diff = d < diff ? diff : d;
-      }
+      auto d = std::abs(heights[i] - heights[i - 1]);
+      diff = d < diff ? diff : d;
       LOG_DEBUG("  " + std::to_string(heights[i]));
     }
     LOG_WARN("edge elevation wayid = " + std::to_string(wayid) + " exceeds difference with " +
@@ -99,11 +95,9 @@ std::vector<int8_t> encode_btf_elevation(const std::unique_ptr<valhalla::skadi::
   auto e = encode_elevation(heights, error);
   if (error) {
     double diff = 0;
-    for (size_t i = 0; i < heights.size(); i++) {
-      if (i < (heights.size() - 1)) {
-        auto d = std::abs(heights[i] - heights[i + 1]);
-        diff = d < diff ? diff : d;
-      }
+    for (size_t i = 1; i < heights.size(); i++) {
+      auto d = std::abs(heights[i] - heights[i - 1]);
+      diff = d < diff ? diff : d;
       LOG_DEBUG("  " + std::to_string(heights[i]));
     }
     LOG_WARN("BTF edge elevation wayid = " + std::to_string(wayid) + " exceeds difference with " +
@@ -273,8 +267,7 @@ void add_elevations_to_single_tile(GraphReader& graphreader,
 void add_elevations_to_multiple_tiles(const boost::property_tree::ptree& pt,
                                       std::deque<GraphId>& tilequeue,
                                       std::mutex& lock,
-                                      const std::unique_ptr<valhalla::skadi::sample>& sample,
-                                      std::promise<uint32_t>& /*result*/) {
+                                      const std::unique_ptr<valhalla::skadi::sample>& sample) {
   // Local Graphreader
   GraphReader graphreader(pt.get_child("mjolnir"));
 
@@ -335,15 +328,13 @@ void ElevationBuilder::Build(const boost::property_tree::ptree& pt,
     tile_ids = get_tile_ids(pt);
 
   std::vector<std::shared_ptr<std::thread>> threads(nthreads);
-  std::vector<std::promise<uint32_t>> results(nthreads);
 
   LOG_INFO("Adding elevation to " + std::to_string(tile_ids.size()) + " tiles with " +
            std::to_string(nthreads) + " threads...");
   std::mutex lock;
   for (auto& thread : threads) {
-    results.emplace_back();
     thread.reset(new std::thread(add_elevations_to_multiple_tiles, std::cref(pt), std::ref(tile_ids),
-                                 std::ref(lock), std::ref(sample), std::ref(results.back())));
+                                 std::ref(lock), std::ref(sample)));
   }
 
   for (auto& thread : threads) {
