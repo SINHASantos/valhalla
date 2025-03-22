@@ -6,7 +6,6 @@
 #include "filesystem.h"
 #include "mjolnir/adminbuilder.h"
 #include "mjolnir/adminconstants.h"
-#include "mjolnir/osmpbfparser.h"
 #include "mjolnir/pbfadminparser.h"
 #include "mjolnir/util.h"
 
@@ -142,8 +141,14 @@ void buffer_polygon(const polygon_t& polygon, multipolygon_t& multipolygon) {
   auto* outer_ring = geos_helper_t::from_striped_container(polygon.outer());
   std::vector<GEOSGeometry*> inner_rings;
   inner_rings.reserve(polygon.inners().size());
-  for (const auto& inner : polygon.inners())
+
+  // annoying circleci apple clang bug, not reproducible on any other machine..
+  // https://github.com/valhalla/valhalla/pull/4500/files#r1445039739
+  auto unused_size = std::to_string(polygon.inners().size());
+
+  for (const auto& inner : polygon.inners()) {
     inner_rings.push_back(geos_helper_t::from_striped_container(inner));
+  }
   auto* geos_poly = GEOSGeom_createPolygon(outer_ring, &inner_rings.front(), inner_rings.size());
   auto* buffered = GEOSBuffer(geos_poly, 0, 8);
   GEOSNormalize(buffered);
@@ -163,7 +168,8 @@ void buffer_polygon(const polygon_t& polygon, multipolygon_t& multipolygon) {
       break;
     }
     default:
-      throw std::runtime_error("Unusable geometry type after buffering");
+      throw std::runtime_error("Unusable geometry type after buffering with inners size " +
+                               unused_size);
   }
   GEOSGeom_destroy(geos_poly);
   GEOSGeom_destroy(buffered);
@@ -380,9 +386,6 @@ bool BuildAdminFromPBF(const boost::property_tree::ptree& pt,
   // relations are defined within the PBFParser class
   OSMAdminData admin_data = PBFAdminParser::Parse(pt, input_files);
 
-  // done with the protobuffer library, cant use it again after this
-  OSMPBF::Parser::free();
-
   if (filesystem::exists(*database)) {
     filesystem::remove(*database);
   }
@@ -425,6 +428,19 @@ bool BuildAdminFromPBF(const boost::property_tree::ptree& pt,
     sqlite3_close(db_handle);
     return false;
   }
+
+  /* creating a MULTIPOLYGON Geometry column */
+  sql = "SELECT AddGeometryColumn('admins', ";
+  sql += "'geom', 4326, 'MULTIPOLYGON', 2)";
+  ret = sqlite3_exec(db_handle, sql.c_str(), NULL, NULL, &err_msg);
+  if (ret != SQLITE_OK) {
+    LOG_ERROR("Error: " + std::string(err_msg));
+    sqlite3_free(err_msg);
+    sqlite3_close(db_handle);
+    return false;
+  }
+
+  LOG_INFO("Created admin table.");
 
   /* creating an admin access table
    * We could support all the commented out
@@ -474,19 +490,7 @@ bool BuildAdminFromPBF(const boost::property_tree::ptree& pt,
   }
 
   LOG_INFO("Created admin access table.");
-
-  /* creating a MULTIPOLYGON Geometry column */
-  sql = "SELECT AddGeometryColumn('admins', ";
-  sql += "'geom', 4326, 'MULTIPOLYGON', 2)";
-  ret = sqlite3_exec(db_handle, sql.c_str(), NULL, NULL, &err_msg);
-  if (ret != SQLITE_OK) {
-    LOG_ERROR("Error: " + std::string(err_msg));
-    sqlite3_free(err_msg);
-    sqlite3_close(db_handle);
-    return false;
-  }
-
-  LOG_INFO("Created admin table.");
+  LOG_INFO("Start populating admin tables.");
 
   /*
    * inserting some MULTIPOLYGONs
